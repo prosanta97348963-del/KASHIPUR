@@ -16,9 +16,10 @@ import { OrderSuccessStep } from './components/OrderSuccessStep';
 import { OrderHistoryView } from './components/OrderHistoryView';
 import { AdminSection } from './components/AdminSection';
 import { LoginModal } from './components/LoginModal';
+import { AdminAccessModal } from './components/AdminAccessModal';
 import { InstallAppModal } from './components/InstallAppModal';
 import { usePWAInstall } from './hooks/usePWAInstall';
-import { Smartphone, Download } from 'lucide-react';
+import { Smartphone, Lock } from 'lucide-react';
 
 export default function App() {
   // Navigation tabs: 'order' | 'history' | 'admin'
@@ -36,6 +37,10 @@ export default function App() {
 
   // Supabase Cloud State
   const [supabaseConnected, setSupabaseConnected] = useState<boolean>(false);
+
+  // Security: Admin Authentication State (Strictly decoupled from Salesman login)
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(false);
+  const [isAccessAdminModalOpen, setIsAccessAdminModalOpen] = useState<boolean>(false);
 
   // Current Working Order Draft
   const [draft, setDraft] = useState<CurrentDraft>({
@@ -96,7 +101,6 @@ export default function App() {
           StorageService.saveOrders(remoteOrders);
         }
       } else if (conn.success && !conn.tablesExist) {
-        // Connected to Supabase project, but tables need to be created via SQL Editor
         setSupabaseConnected(false);
       }
     } catch (err) {
@@ -209,10 +213,20 @@ export default function App() {
     setDraft((prev) => ({ ...prev, salesBoyName: sb.name }));
   };
 
-  const handleLogout = () => {
-    setCurrentSalesBoy(null);
-    StorageService.setCurrentSalesBoy(null);
-    setIsLoginModalOpen(true);
+  // Safe navigation handler
+  const handleTabChange = (tab: 'order' | 'history' | 'admin') => {
+    if (tab === 'admin') {
+      if (!isAdminAuthenticated) {
+        setIsAccessAdminModalOpen(true);
+        return;
+      }
+    }
+    setCurrentTab(tab);
+  };
+
+  const handleExitAdmin = () => {
+    setIsAdminAuthenticated(false);
+    setCurrentTab('order');
   };
 
   // Handlers for Order Confirmation & Finalization
@@ -221,7 +235,7 @@ export default function App() {
     const dd = String(now.getDate()).padStart(2, '0');
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const yyyy = now.getFullYear();
-    const orderDateStr = `${dd}/${mm}/${yyyy}`; // e.g. 13/10/2026
+    const orderDateStr = `${dd}/${mm}/${yyyy}`;
 
     let hours = now.getHours();
     const minutes = String(now.getMinutes()).padStart(2, '0');
@@ -257,7 +271,7 @@ export default function App() {
       shopPhone: draft.shopPhone.trim(),
       shopAddress: draft.shopAddress.trim(),
       salesBoyId: currentSalesBoy?.id,
-      salesBoyName: draft.salesBoyName.trim() || currentSalesBoy?.name || 'Sales Boy',
+      salesBoyName: draft.salesBoyName.trim() || currentSalesBoy?.name || 'Salesman',
       orderDate: orderDateStr,
       orderTime: orderTimeStr,
       timestamp: Date.now(),
@@ -338,18 +352,16 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col font-sans text-gray-900 antialiased selection:bg-emerald-200">
-      {/* Top Application Header */}
+      {/* Top Application Header - Salesman Focused */}
       <Header
         currentTab={currentTab}
-        setCurrentTab={(tab) => {
-          setCurrentTab(tab);
-        }}
+        setCurrentTab={handleTabChange}
         currentSalesBoy={currentSalesBoy}
         onOpenLogin={() => setIsLoginModalOpen(true)}
-        onLogout={handleLogout}
         companySettings={settings}
         draftItemCount={draftItemCount}
-        supabaseConnected={supabaseConnected}
+        isAdminAuthenticated={isAdminAuthenticated}
+        onExitAdmin={handleExitAdmin}
         onOpenInstallModal={() => setIsInstallModalOpen(true)}
       />
 
@@ -417,7 +429,8 @@ export default function App() {
           />
         )}
 
-        {currentTab === 'admin' && (
+        {/* Admin Section: STRICTLY protected by isAdminAuthenticated */}
+        {currentTab === 'admin' && isAdminAuthenticated && (
           <AdminSection
             products={products}
             onAddProduct={handleAddProduct}
@@ -432,9 +445,22 @@ export default function App() {
             onResetAllData={handleResetAllData}
             allOrdersCount={orders.length}
             onSyncWithSupabase={syncWithSupabase}
+            onExitAdmin={handleExitAdmin}
           />
         )}
       </main>
+
+      {/* Subtle Footer with Hidden "Access Admin" */}
+      <footer className="pt-4 pb-20 text-center">
+        <button
+          type="button"
+          onClick={() => setIsAccessAdminModalOpen(true)}
+          className="text-[11px] text-gray-400 hover:text-gray-600 active:text-gray-800 transition-colors inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-full border border-gray-200/60 bg-white/50"
+        >
+          <Lock className="w-3 h-3 text-gray-400" />
+          <span>Access Admin</span>
+        </button>
+      </footer>
 
       {/* Order Confirmation Modal */}
       <OrderConfirmationModal
@@ -447,17 +473,24 @@ export default function App() {
         currency={settings.currency || '₹'}
       />
 
-      {/* Login & Sales Boy Switcher Modal */}
+      {/* Salesman Profile Switcher Modal (Strictly for Salesmen, NO Admin Access) */}
       <LoginModal
         isOpen={isLoginModalOpen}
         onClose={() => setIsLoginModalOpen(false)}
         salesBoys={salesBoys}
         currentSalesBoy={currentSalesBoy}
         onSelectSalesBoy={handleSelectSalesBoy}
-        companySettings={settings}
-        onAdminLogin={() => {
+      />
+
+      {/* Secure Hidden Admin PIN Modal */}
+      <AdminAccessModal
+        isOpen={isAccessAdminModalOpen}
+        onClose={() => setIsAccessAdminModalOpen(false)}
+        onSuccess={() => {
+          setIsAdminAuthenticated(true);
           setCurrentTab('admin');
         }}
+        correctPin={settings.adminPin || '9999'}
       />
 
       {/* Small Bottom APK Download / Install Button */}
