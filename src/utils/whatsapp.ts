@@ -1,72 +1,74 @@
 import { Order } from '../types';
 
+export interface WhatsAppFormatOptions {
+  includePrices?: boolean; // defaults to false (compact format for billing software)
+  currency?: string;
+}
+
 /**
- * Formats order into the exact WhatsApp message format specified in instructions:
+ * Formats order into a clean, concise, compact WhatsApp message.
+ * Removes unnecessary line breaks, spaces, prices, and amounts by default.
+ * Designed specifically for fast entry into billing software.
  * 
- * NEW SALES ORDER
- * 
- * Order ID: ORD-20261013-001
- * Date: 13/10/2026
- * 
- * SHOP DETAILS
- * Shop Name: ABC Store
+ * Example Output:
+ * *ORDER: ABC Store*
+ * ID: ORD-20261013-001 | Date: 13/10/2026
  * Phone: 9876543210
  * Address: Kolkata, West Bengal
  * 
- * PRODUCT DETAILS
+ * *ITEMS:*
+ * 1. Parle-G Glucose Biscuits (800g) (P001) - 10 pcs
+ * 2. Maggi 2-Minute Noodles (12-Pack) (P003) - 5 pcs
  * 
- * 1. Product A
- *    Code: P001
- *    Quantity: 10
- *    Price: ₹100
- *    Amount: ₹1,000
- * 
- * ---
- * 
- * Total Items: 2
- * Total Quantity: 15
- * Grand Total: ₹2,000
- * 
- * Sales Boy: Rahul
- * 
- * Please confirm this order.
+ * Total Items: 2 | Total Qty: 15 pcs
+ * Salesman: Rahul
  */
-export function formatWhatsAppOrderMessage(order: Order, currency = '₹'): string {
-  const formatAmount = (num: number) => {
-    return num.toLocaleString('en-IN');
-  };
+export function formatWhatsAppOrderMessage(
+  order: Order,
+  optionsOrCurrency: WhatsAppFormatOptions | string = {}
+): string {
+  const options: WhatsAppFormatOptions =
+    typeof optionsOrCurrency === 'string'
+      ? { currency: optionsOrCurrency, includePrices: false }
+      : { includePrices: false, currency: '₹', ...optionsOrCurrency };
 
-  const productList = order.items
-    .map((item, index) => {
-      return `${index + 1}. ${item.productName}\n   Code: ${item.productCode}\n   Quantity: ${item.quantity}\n   Price: ${currency}${formatAmount(item.price)}\n   Amount: ${currency}${formatAmount(item.amount)}`;
-    })
-    .join('\n\n');
+  const currency = options.currency || '₹';
+  const includePrices = Boolean(options.includePrices);
 
-  const lines = [
-    '*NEW SALES ORDER*',
-    '',
-    `*Order ID:* ${order.orderId}`,
-    `*Date:* ${order.orderDate}`,
-    '',
-    '*SHOP DETAILS*',
-    `Shop Name: ${order.shopName}`,
+  const formatAmount = (num: number) => num.toLocaleString('en-IN');
+
+  // Single-line compact product items
+  const productLines = order.items.map((item, index) => {
+    if (includePrices) {
+      return `${index + 1}. ${item.productName} (${item.productCode}) - ${item.quantity} pcs @ ${currency}${formatAmount(item.price)} = ${currency}${formatAmount(item.amount)}`;
+    }
+    // Clean compact format: No price/amount, 1 line per product
+    return `${index + 1}. ${item.productName} (${item.productCode}) - ${item.quantity} pcs`;
+  });
+
+  const lines: string[] = [
+    `*ORDER: ${order.shopName}*`,
+    `ID: ${order.orderId} | Date: ${order.orderDate}`,
     `Phone: ${order.shopPhone}`,
-    `Address: ${order.shopAddress}`,
-    '',
-    '*PRODUCT DETAILS*',
-    '',
-    productList,
-    '',
-    '---',
-    '',
-    `*Total Items:* ${order.totalItems}`,
-    `*Total Quantity:* ${order.totalQuantity}`,
-    `*Grand Total:* ${currency}${formatAmount(order.grandTotal)}`,
-    '',
-    `*Sales Boy:* ${order.salesBoyName || 'N/A'}`,
-    '',
-    'Please confirm this order.'
   ];
+
+  if (order.shopAddress) {
+    lines.push(`Address: ${order.shopAddress}`);
+  }
+
+  lines.push('');
+  lines.push('*ITEMS:*');
+  lines.push(...productLines);
+  lines.push('');
+  lines.push(`Total Items: ${order.totalItems} | Total Qty: ${order.totalQuantity} pcs`);
+
+  if (includePrices) {
+    lines.push(`Grand Total: ${currency}${formatAmount(order.grandTotal)}`);
+  }
+
+  if (order.salesBoyName) {
+    lines.push(`Salesman: ${order.salesBoyName}`);
+  }
 
   return lines.join('\n');
 }

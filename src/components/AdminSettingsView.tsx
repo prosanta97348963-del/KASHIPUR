@@ -514,14 +514,14 @@ export const AdminSettingsView: React.FC<AdminSettingsViewProps> = ({
           <button
             type="button"
             onClick={() => {
-              if (confirm('Reset demo data to initial factory state? All orders will be cleared.')) {
+              if (confirm('Reset to official A.R SELLS catalog? All orders will be cleared and official products loaded.')) {
                 onResetAllData();
               }
             }}
             className="w-full py-2 px-3 text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 font-bold rounded-xl flex items-center justify-center space-x-1.5 transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset to Default Demo Products & Data</span>
+            <span>Reset to Official A.R SELLS Catalog & Clean Orders</span>
           </button>
         </div>
       </div>

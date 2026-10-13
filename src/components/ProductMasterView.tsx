@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Product, CompanySettings } from '../types';
-import { Plus, Edit2, Trash2, CheckCircle2, XCircle, Search, Save, X, Package } from 'lucide-react';
+import { Plus, Edit2, Trash2, CheckCircle2, XCircle, Search, Save, X, Package, RotateCcw } from 'lucide-react';
 
 interface ProductMasterViewProps {
   products: Product[];
@@ -8,6 +8,7 @@ interface ProductMasterViewProps {
   onUpdateProduct: (product: Product) => void;
   onDeleteProduct: (id: string) => void;
   companySettings: CompanySettings;
+  onReloadCatalog?: () => void;
 }
 
 export const ProductMasterView: React.FC<ProductMasterViewProps> = ({
@@ -16,6 +17,7 @@ export const ProductMasterView: React.FC<ProductMasterViewProps> = ({
   onUpdateProduct,
   onDeleteProduct,
   companySettings,
+  onReloadCatalog,
 }) => {
   const [search, setSearch] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -103,13 +105,30 @@ export const ProductMasterView: React.FC<ProductMasterViewProps> = ({
             {products.filter((p) => p.active).length} Active • {products.length} Total
           </p>
         </div>
-        <button
-          onClick={openAddModal}
-          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center space-x-1"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Add Product</span>
-        </button>
+        <div className="flex items-center space-x-1.5">
+          {onReloadCatalog && (
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm('Reload official A.R SELLS catalog? This will restore all standard products.')) {
+                  onReloadCatalog();
+                }
+              }}
+              className="px-2.5 py-2 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-300 font-bold text-xs rounded-xl flex items-center space-x-1 transition-colors"
+              title="Reload all standard products"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Reload Catalog</span>
+            </button>
+          )}
+          <button
+            onClick={openAddModal}
+            className="px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center space-x-1"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Add Product</span>
+          </button>
+        </div>
       </div>
 
       {/* Search */}
@@ -215,7 +234,7 @@ export const ProductMasterView: React.FC<ProductMasterViewProps> = ({
                   required
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="e.g. Parle-G 800g"
+                  placeholder="e.g. HALDI MASALA(₹5/-)"
                   className="w-full px-3 py-2 text-xs border border-gray-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-emerald-500 font-medium"
                 />
               </div>

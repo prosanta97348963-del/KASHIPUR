@@ -71,11 +71,12 @@ export default function App() {
 
         // 1. Fetch remote products
         const remoteProds = await SupabaseService.getProducts();
-        if (remoteProds && remoteProds.length > 0) {
+        const hasLegacyDemo = remoteProds && remoteProds.some((p) => p.id === 'prod-1' || p.name.includes('Parle-G'));
+        if (remoteProds && remoteProds.length > 0 && !hasLegacyDemo) {
           setProducts(remoteProds);
           StorageService.saveProducts(remoteProds);
         } else {
-          // If remote is empty, seed local products into Supabase
+          // If remote is empty or has old demo items, seed official catalog into Supabase
           const localProds = StorageService.getProducts();
           for (const p of localProds) {
             await SupabaseService.upsertProduct(p);
@@ -336,6 +337,11 @@ export default function App() {
     handleStartNewOrder();
   };
 
+  const handleReloadCatalog = () => {
+    const catalog = StorageService.resetToCatalog();
+    setProducts(catalog);
+  };
+
   // Calculate quick totals for confirmation modal
   const confirmationTotals = (() => {
     let qty = 0;
@@ -446,6 +452,7 @@ export default function App() {
             allOrdersCount={orders.length}
             onSyncWithSupabase={syncWithSupabase}
             onExitAdmin={handleExitAdmin}
+            onReloadCatalog={handleReloadCatalog}
           />
         )}
       </main>

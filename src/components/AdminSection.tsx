@@ -19,6 +19,7 @@ interface AdminSectionProps {
   allOrdersCount: number;
   onSyncWithSupabase?: () => Promise<void>;
   onExitAdmin?: () => void;
+  onReloadCatalog?: () => void;
 }
 
 export const AdminSection: React.FC<AdminSectionProps> = ({
@@ -36,6 +37,7 @@ export const AdminSection: React.FC<AdminSectionProps> = ({
   allOrdersCount,
   onSyncWithSupabase,
   onExitAdmin,
+  onReloadCatalog,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<'products' | 'settings'>('products');
 
@@ -99,6 +101,7 @@ export const AdminSection: React.FC<AdminSectionProps> = ({
           onUpdateProduct={onUpdateProduct}
           onDeleteProduct={onDeleteProduct}
           companySettings={settings}
+          onReloadCatalog={onReloadCatalog}
         />
       ) : (
         <AdminSettingsView

@@ -1,30 +1,18 @@
 import { Product, SalesBoy, Order, CompanySettings, CurrentDraft } from '../types';
+import { CATALOG_PRODUCTS } from '../data/catalog';
 
 const STORAGE_KEYS = {
-  PRODUCTS: 'quickorder_products_v1',
+  PRODUCTS: 'arsells_products_v3',
   SALES_BOYS: 'quickorder_sales_boys_v1',
   ORDERS: 'quickorder_orders_v1',
   SETTINGS: 'quickorder_settings_v1',
   CURRENT_USER: 'quickorder_current_user_v1',
   CURRENT_DRAFT: 'quickorder_draft_v1',
-  SAVED_SHOPS: 'quickorder_saved_shops_v1',
+  SAVED_SHOPS: 'arsells_shops_v3',
 };
 
-// Initial realistic default products
-export const DEFAULT_PRODUCTS: Product[] = [
-  { id: 'prod-1', name: 'Parle-G Glucose Biscuits (800g)', code: 'P001', price: 90, category: 'Biscuits & Bakery', active: true },
-  { id: 'prod-2', name: 'Britannia Good Day Butter (600g)', code: 'P002', price: 120, category: 'Biscuits & Bakery', active: true },
-  { id: 'prod-3', name: 'Maggi 2-Minute Noodles (12-Pack)', code: 'P003', price: 168, category: 'Instant Food', active: true },
-  { id: 'prod-4', name: 'Tata Tea Gold (500g)', code: 'P004', price: 295, category: 'Beverages', active: true },
-  { id: 'prod-5', name: 'Bru Instant Coffee (200g)', code: 'P005', price: 280, category: 'Beverages', active: true },
-  { id: 'prod-6', name: 'Fortune Refined Sunflower Oil (1L)', code: 'P006', price: 145, category: 'Staples & Oils', active: true },
-  { id: 'prod-7', name: 'Aashirvaad Shudh Chakki Atta (5kg)', code: 'P007', price: 240, category: 'Staples & Oils', active: true },
-  { id: 'prod-8', name: 'Surf Excel Quick Wash Detergent (1kg)', code: 'P008', price: 155, category: 'Home Care', active: true },
-  { id: 'prod-9', name: 'Dettol Original Liquid Handwash (750ml Refill)', code: 'P009', price: 110, category: 'Personal Care', active: true },
-  { id: 'prod-10', name: 'Colgate MaxFresh Spicy Red (150g)', code: 'P010', price: 115, category: 'Personal Care', active: true },
-  { id: 'prod-11', name: 'Haldiram Bhujia Sev (400g)', code: 'P011', price: 135, category: 'Snacks & Savouries', active: true },
-  { id: 'prod-12', name: 'Everest Garam Masala (100g)', code: 'P012', price: 92, category: 'Spices', active: true },
-];
+// Official A.R SELLS product catalog
+export const DEFAULT_PRODUCTS: Product[] = CATALOG_PRODUCTS;
 
 export const DEFAULT_SALES_BOYS: SalesBoy[] = [
   { id: 'sb-1', name: 'Rahul Sharma', mobile: '9876543210', pin: '1234', active: true },
@@ -39,12 +27,8 @@ export const DEFAULT_SETTINGS: CompanySettings = {
   currency: '₹',
 };
 
-export const DEFAULT_SHOPS = [
-  { shopName: 'Maa Kali General Store', shopPhone: '9830112233', shopAddress: '14 B.B. Ganguly Street, Bowbazar, Kolkata' },
-  { shopName: 'ABC Grocery & Daily Needs', shopPhone: '9876543210', shopAddress: 'Shop #4, College Square Market, Kolkata' },
-  { shopName: 'Gupta Brothers Variety Store', shopPhone: '9831998877', shopAddress: '22 MG Road, Girish Park, Kolkata' },
-  { shopName: 'Om Sai Super Store', shopPhone: '9820554433', shopAddress: 'Near Garia Metro Station, Kolkata' },
-];
+// No fake demo shops - salesmen will enter real shops
+export const DEFAULT_SHOPS: Array<{ shopName: string; shopPhone: string; shopAddress: string }> = [];
 
 // Helper to safely read from localStorage
 function safeGet<T>(key: string, fallback: T): T {
@@ -70,11 +54,22 @@ function safeSet<T>(key: string, value: T): void {
 export const StorageService = {
   getProducts(): Product[] {
     const existing = safeGet<Product[] | null>(STORAGE_KEYS.PRODUCTS, null);
-    if (!existing || existing.length === 0) {
+    // Check if not set or contains legacy demo items (e.g. Parle-G, prod-1)
+    const hasLegacyDemo =
+      !existing ||
+      existing.length === 0 ||
+      existing.some((p) => p.id === 'prod-1' || p.name.includes('Parle-G') || p.name.includes('Britannia'));
+
+    if (hasLegacyDemo) {
       safeSet(STORAGE_KEYS.PRODUCTS, DEFAULT_PRODUCTS);
       return DEFAULT_PRODUCTS;
     }
     return existing;
+  },
+
+  resetToCatalog(): Product[] {
+    safeSet(STORAGE_KEYS.PRODUCTS, DEFAULT_PRODUCTS);
+    return DEFAULT_PRODUCTS;
   },
 
   saveProducts(products: Product[]): void {
@@ -212,7 +207,18 @@ export const StorageService = {
       STORAGE_KEYS.SAVED_SHOPS,
       DEFAULT_SHOPS
     );
-    return existing;
+    // Automatically purge old demo shops
+    const cleaned = existing.filter(
+      (s) =>
+        !s.shopName.includes('Maa Kali') &&
+        !s.shopName.includes('ABC Grocery') &&
+        !s.shopName.includes('Gupta Brothers') &&
+        !s.shopName.includes('Om Sai')
+    );
+    if (cleaned.length !== existing.length) {
+      safeSet(STORAGE_KEYS.SAVED_SHOPS, cleaned);
+    }
+    return cleaned;
   },
 
   saveShop(shop: { shopName: string; shopPhone: string; shopAddress: string }): void {
@@ -235,12 +241,14 @@ export const StorageService = {
   },
 
   resetAllData(): void {
-    localStorage.removeItem(STORAGE_KEYS.PRODUCTS);
-    localStorage.removeItem(STORAGE_KEYS.SALES_BOYS);
-    localStorage.removeItem(STORAGE_KEYS.ORDERS);
-    localStorage.removeItem(STORAGE_KEYS.SETTINGS);
-    localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+    safeSet(STORAGE_KEYS.PRODUCTS, DEFAULT_PRODUCTS);
+    safeSet(STORAGE_KEYS.SAVED_SHOPS, []);
+    safeSet(STORAGE_KEYS.ORDERS, []);
+    safeSet(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
+    safeSet(STORAGE_KEYS.CURRENT_USER, DEFAULT_SALES_BOYS[0]);
     localStorage.removeItem(STORAGE_KEYS.CURRENT_DRAFT);
-    localStorage.removeItem(STORAGE_KEYS.SAVED_SHOPS);
+    // Clean old keys too
+    localStorage.removeItem('quickorder_products_v1');
+    localStorage.removeItem('quickorder_saved_shops_v1');
   },
 };
