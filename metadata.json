@@ -1,0 +1,6 @@
+{
+  "name": "QuickOrder - Sales Order & WhatsApp App",
+  "description": "Mobile-friendly sales order management app for field sales boys to take shop orders and instantly share formatted orders via WhatsApp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
