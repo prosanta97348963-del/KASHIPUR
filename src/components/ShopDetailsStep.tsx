@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { CurrentDraft, SalesBoy } from '../types';
 import { StorageService } from '../utils/storage';
-import { Store, Phone, MapPin, User, ArrowRight, AlertCircle, Sparkles } from 'lucide-react';
+import { validateShopDetails } from '../utils/orderValidation';
+import { Store, Phone, MapPin, User, ArrowRight, AlertCircle, Sparkles, LogIn } from 'lucide-react';
 
 interface ShopDetailsStepProps {
   draft: CurrentDraft;
   setDraft: React.Dispatch<React.SetStateAction<CurrentDraft>>;
   currentSalesBoy: SalesBoy | null;
   onStartOrder: () => void;
+  onOpenLogin?: () => void;
 }
 
 export const ShopDetailsStep: React.FC<ShopDetailsStepProps> = ({
@@ -15,11 +17,13 @@ export const ShopDetailsStep: React.FC<ShopDetailsStepProps> = ({
   setDraft,
   currentSalesBoy,
   onStartOrder,
+  onOpenLogin,
 }) => {
   const [errors, setErrors] = useState<{
     shopName?: string;
     shopPhone?: string;
     shopAddress?: string;
+    salesBoy?: string;
   }>({});
 
   const savedShops = StorageService.getSavedShops();
@@ -31,32 +35,35 @@ export const ShopDetailsStep: React.FC<ShopDetailsStepProps> = ({
       shopPhone: shop.shopPhone,
       shopAddress: shop.shopAddress,
     }));
-    setErrors({});
+    setErrors((prev) => ({ ...prev, shopName: undefined, shopPhone: undefined, shopAddress: undefined }));
   };
 
   const handleValidateAndProceed = (e: React.FormEvent) => {
     e.preventDefault();
-    const newErrors: typeof errors = {};
 
-    if (!draft.shopName.trim()) {
-      newErrors.shopName = 'Shop Name is required to start order';
+    // Check salesman login
+    if (!currentSalesBoy) {
+      setErrors((prev) => ({
+        ...prev,
+        salesBoy: 'Salesman authentication is required. Please login with your PIN to start taking orders.',
+      }));
+      if (onOpenLogin) onOpenLogin();
+      return;
     }
 
-    if (!draft.shopPhone.trim()) {
-      newErrors.shopPhone = 'Shop Phone Number is required';
-    } else if (draft.shopPhone.replace(/\D/g, '').length < 7) {
-      newErrors.shopPhone = 'Enter a valid phone number (at least 7-10 digits)';
+    const valResult = validateShopDetails({
+      shopName: draft.shopName,
+      shopPhone: draft.shopPhone,
+      shopAddress: draft.shopAddress,
+    });
+
+    if (!valResult.isValid) {
+      setErrors(valResult.errors);
+      return;
     }
 
-    if (!draft.shopAddress.trim()) {
-      newErrors.shopAddress = 'Shop Address is required';
-    }
-
-    setErrors(newErrors);
-
-    if (Object.keys(newErrors).length === 0) {
-      onStartOrder();
-    }
+    setErrors({});
+    onStartOrder();
   };
 
   return (
@@ -76,6 +83,31 @@ export const ShopDetailsStep: React.FC<ShopDetailsStepProps> = ({
           Fill in the retail shop details below to begin adding products to the order.
         </p>
       </div>
+
+      {/* Salesman Login prompt if not logged in */}
+      {!currentSalesBoy && (
+        <div className="mb-4 bg-amber-50 border border-amber-300 rounded-2xl p-3.5 flex items-center justify-between shadow-2xs">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-800">
+              <User className="w-4 h-4" />
+            </div>
+            <div>
+              <span className="text-xs font-bold text-amber-900 block">Salesman Login Required</span>
+              <span className="text-[11px] text-amber-700">Login with your PIN before placing orders</span>
+            </div>
+          </div>
+          {onOpenLogin && (
+            <button
+              type="button"
+              onClick={onOpenLogin}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white text-xs font-bold rounded-xl shadow-2xs flex items-center space-x-1"
+            >
+              <LogIn className="w-3.5 h-3.5" />
+              <span>Login</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Quick Repeat Shop Autofill Chips */}
       {savedShops.length > 0 && (
@@ -101,6 +133,13 @@ export const ShopDetailsStep: React.FC<ShopDetailsStepProps> = ({
 
       {/* Main Form */}
       <form onSubmit={handleValidateAndProceed} className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-4">
+        {errors.salesBoy && (
+          <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-semibold flex items-center space-x-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+            <span>{errors.salesBoy}</span>
+          </div>
+        )}
+
         {/* Shop Name */}
         <div>
           <label className="block text-xs font-bold text-gray-800 uppercase tracking-wide mb-1.5">
@@ -194,20 +233,30 @@ export const ShopDetailsStep: React.FC<ShopDetailsStepProps> = ({
           )}
         </div>
 
-        {/* Sales Boy Name */}
+        {/* Salesman info display */}
         <div>
           <label className="block text-xs font-bold text-gray-800 uppercase tracking-wide mb-1.5">
-            Sales Boy Name <span className="text-gray-400 font-normal text-[11px]">(Optional)</span>
+            Salesman
           </label>
-          <div className="relative">
-            <User className="w-4 h-4 absolute left-3.5 top-3.5 text-gray-400" />
-            <input
-              type="text"
-              value={draft.salesBoyName || currentSalesBoy?.name || ''}
-              onChange={(e) => setDraft((prev) => ({ ...prev, salesBoyName: e.target.value }))}
-              placeholder="e.g. Rahul"
-              className="w-full pl-10 pr-3 py-2.5 text-sm font-medium border border-gray-300 rounded-xl focus:border-emerald-500 focus:ring-2 focus:ring-emerald-400/30 focus:outline-hidden"
-            />
+          <div className="relative flex items-center justify-between p-2.5 bg-gray-50 border border-gray-200 rounded-xl">
+            <div className="flex items-center space-x-2 text-xs">
+              <User className="w-4 h-4 text-emerald-600" />
+              <span className="font-bold text-gray-900">
+                {currentSalesBoy ? currentSalesBoy.name : 'Not logged in'}
+              </span>
+              {currentSalesBoy && (
+                <span className="text-[11px] text-gray-500 font-mono">({currentSalesBoy.mobile})</span>
+              )}
+            </div>
+            {onOpenLogin && (
+              <button
+                type="button"
+                onClick={onOpenLogin}
+                className="text-xs text-emerald-700 hover:text-emerald-800 font-bold underline"
+              >
+                {currentSalesBoy ? 'Switch' : 'Login'}
+              </button>
+            )}
           </div>
         </div>
 

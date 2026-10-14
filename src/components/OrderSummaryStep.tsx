@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CurrentDraft, Product, CompanySettings, OrderItem } from '../types';
 import { Store, Phone, MapPin, User, ArrowLeft, CheckCircle2, AlertTriangle, Trash2, Edit3 } from 'lucide-react';
+import { validateAndCalculateOrder, roundCurrency } from '../utils/orderValidation';
 
 interface OrderSummaryStepProps {
   draft: CurrentDraft;
@@ -21,27 +22,12 @@ export const OrderSummaryStep: React.FC<OrderSummaryStepProps> = ({
 }) => {
   const currency = companySettings.currency || '₹';
 
-  // Compute selected items
-  const orderItems: OrderItem[] = Object.entries(draft.selectedQuantities)
-    .filter(([_, qty]) => qty > 0)
-    .map(([productId, quantity]) => {
-      const prod = products.find((p) => p.id === productId);
-      const name = prod ? prod.name : 'Unknown Product';
-      const code = prod ? prod.code : 'SKU';
-      const price = prod ? prod.price : 0;
-      return {
-        productId,
-        productName: name,
-        productCode: code,
-        quantity,
-        price,
-        amount: price * quantity,
-      };
-    });
-
+  // Compute selected items with authoritative catalog validation and 2-decimal precision
+  const { validatedItems: orderItems, totalQuantity, grandTotal } = validateAndCalculateOrder(
+    draft.selectedQuantities,
+    products
+  );
   const totalItems = orderItems.length;
-  const totalQuantity = orderItems.reduce((acc, item) => acc + item.quantity, 0);
-  const grandTotal = orderItems.reduce((acc, item) => acc + item.amount, 0);
 
   return (
     <div className="max-w-md mx-auto p-4 pb-28 animate-in fade-in duration-150 space-y-4">

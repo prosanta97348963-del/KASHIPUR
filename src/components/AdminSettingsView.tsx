@@ -243,7 +243,7 @@ export const AdminSettingsView: React.FC<AdminSettingsViewProps> = ({
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold text-emerald-100 flex items-center space-x-1">
               <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Step 1: Create Tables in Supabase</span>
+              <span>Step 1: Run Safe SQL Migration & Atomic Order RPC</span>
             </span>
             <button
               type="button"
@@ -258,7 +258,7 @@ export const AdminSettingsView: React.FC<AdminSettingsViewProps> = ({
               ) : (
                 <>
                   <Copy className="w-3.5 h-3.5" />
-                  <span>Copy SQL Query</span>
+                  <span>Copy SQL Migration</span>
                 </>
               )}
             </button>
@@ -273,7 +273,7 @@ export const AdminSettingsView: React.FC<AdminSettingsViewProps> = ({
             >
               Supabase SQL Editor <ExternalLink className="w-3 h-3 ml-0.5 inline" />
             </a>
-            , paste the query and click <b>Run</b>. It creates all tables and permissions automatically.
+            , paste the query and click <b>Run</b>. It adds atomic order transactions (<code className="font-mono text-[10px] bg-black/30 px-1 py-0.5 rounded">submit_sales_order</code>), central multi-device collision protection, idempotency duplicate prevention, and secure RLS policies without deleting any existing business data.
           </p>
         </div>
 

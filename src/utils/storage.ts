@@ -5,6 +5,7 @@ const STORAGE_KEYS = {
   PRODUCTS: 'arsells_products_v3',
   SALES_BOYS: 'quickorder_sales_boys_v1',
   ORDERS: 'quickorder_orders_v1',
+  PENDING_ORDERS: 'arsells_pending_orders_v1',
   SETTINGS: 'quickorder_settings_v1',
   CURRENT_USER: 'quickorder_current_user_v1',
   CURRENT_DRAFT: 'quickorder_draft_v1',
@@ -150,38 +151,141 @@ export const StorageService = {
   },
 
   getCurrentSalesBoy(): SalesBoy | null {
-    return safeGet<SalesBoy | null>(STORAGE_KEYS.CURRENT_USER, DEFAULT_SALES_BOYS[0]);
+    const boy = safeGet<SalesBoy | null>(STORAGE_KEYS.CURRENT_USER, null);
+    if (boy && !boy.active) {
+      safeSet(STORAGE_KEYS.CURRENT_USER, null);
+      return null;
+    }
+    return boy;
   },
 
   setCurrentSalesBoy(salesBoy: SalesBoy | null): void {
+    if (salesBoy && !salesBoy.active) {
+      safeSet(STORAGE_KEYS.CURRENT_USER, null);
+      return;
+    }
     safeSet(STORAGE_KEYS.CURRENT_USER, salesBoy);
   },
 
   getOrders(): Order[] {
     const orders = safeGet<Order[]>(STORAGE_KEYS.ORDERS, []);
-    return orders.sort((a, b) => b.timestamp - a.timestamp);
+    // Ensure all orders have syncStatus and idempotencyKey
+    const sanitized = orders.map((o) => ({
+      ...o,
+      syncStatus: (o.syncStatus || 'synced') as Order['syncStatus'],
+      idempotencyKey: o.idempotencyKey || `migrated_${o.id || o.orderId}`,
+    }));
+    return sanitized.sort((a, b) => b.timestamp - a.timestamp);
   },
 
   saveOrders(orders: Order[]): void {
     safeSet(STORAGE_KEYS.ORDERS, orders);
   },
 
-  generateNextOrderId(): string {
+  getPendingOrders(): Order[] {
+    const pending = safeGet<Order[]>(STORAGE_KEYS.PENDING_ORDERS, []);
+    return pending.sort((a, b) => a.timestamp - b.timestamp);
+  },
+
+  savePendingOrders(pending: Order[]): void {
+    safeSet(STORAGE_KEYS.PENDING_ORDERS, pending);
+  },
+
+  addPendingOrder(order: Order): void {
+    const pending = this.getPendingOrders();
+    const existingIdx = pending.findIndex((p) => p.idempotencyKey === order.idempotencyKey || p.id === order.id);
+    if (existingIdx >= 0) {
+      pending[existingIdx] = order;
+    } else {
+      pending.push(order);
+    }
+    this.savePendingOrders(pending);
+  },
+
+  removePendingOrder(idempotencyKeyOrId: string): void {
+    const pending = this.getPendingOrders().filter(
+      (p) => p.idempotencyKey !== idempotencyKeyOrId && p.id !== idempotencyKeyOrId
+    );
+    this.savePendingOrders(pending);
+  },
+
+  markOrderSynced(idempotencyKey: string, serverOrderId?: string): void {
+    // 1. Remove from pending queue
+    this.removePendingOrder(idempotencyKey);
+
+    // 2. Update status in all orders list
+    const orders = this.getOrders().map((o) => {
+      if (o.idempotencyKey === idempotencyKey) {
+        return {
+          ...o,
+          orderId: serverOrderId || o.orderId,
+          syncStatus: 'synced' as const,
+          lastSyncError: undefined,
+        };
+      }
+      return o;
+    });
+    this.saveOrders(orders);
+  },
+
+  markOrderFailed(idempotencyKey: string, errorMessage: string): void {
+    const orders = this.getOrders().map((o) => {
+      if (o.idempotencyKey === idempotencyKey) {
+        return {
+          ...o,
+          syncStatus: 'failed' as const,
+          lastSyncError: errorMessage,
+        };
+      }
+      return o;
+    });
+    this.saveOrders(orders);
+
+    const pending = this.getPendingOrders().map((p) => {
+      if (p.idempotencyKey === idempotencyKey) {
+        return {
+          ...p,
+          syncStatus: 'failed' as const,
+          lastSyncError: errorMessage,
+        };
+      }
+      return p;
+    });
+    this.savePendingOrders(pending);
+  },
+
+  /**
+   * Generates a unique, collision-proof order ID.
+   * Format: ORD-YYYYMMDD-[salesmanShort]-[seq]-[randHex]
+   * Ensures concurrent orders from different phones cannot receive duplicate IDs.
+   */
+  generateNextOrderId(salesBoyId?: string): string {
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, '0');
     const dd = String(now.getDate()).padStart(2, '0');
-    const prefix = `ORD-${yyyy}${mm}${dd}`;
+    const datePrefix = `ORD-${yyyy}${mm}${dd}`;
+
+    const boyCode = salesBoyId ? salesBoyId.replace(/\D/g, '').slice(-3) || 'S1' : 'X';
+    const randSuffix = Math.random().toString(36).substring(2, 5).toUpperCase();
 
     const orders = this.getOrders();
-    const todayOrders = orders.filter((o) => o.orderId.startsWith(prefix));
-    const nextSeq = todayOrders.length + 1;
-    return `${prefix}-${String(nextSeq).padStart(3, '0')}`;
+    const todayOrders = orders.filter((o) => o.orderDate?.includes(`${dd}/${mm}/${yyyy}`) || o.orderId.startsWith(datePrefix));
+    const nextSeq = String(todayOrders.length + 1).padStart(3, '0');
+
+    return `${datePrefix}-${boyCode}-${nextSeq}-${randSuffix}`;
   },
 
   addOrder(order: Order): void {
     const orders = this.getOrders();
-    orders.unshift(order);
+    const existingIdx = orders.findIndex(
+      (o) => o.idempotencyKey === order.idempotencyKey || o.id === order.id
+    );
+    if (existingIdx >= 0) {
+      orders[existingIdx] = order;
+    } else {
+      orders.unshift(order);
+    }
     this.saveOrders(orders);
 
     // Also remember this shop for quick autofill next time
@@ -200,6 +304,7 @@ export const StorageService = {
   deleteOrder(orderId: string): void {
     const orders = this.getOrders().filter((o) => o.id !== orderId);
     this.saveOrders(orders);
+    this.removePendingOrder(orderId);
   },
 
   getSavedShops(): Array<{ shopName: string; shopPhone: string; shopAddress: string }> {
@@ -244,11 +349,13 @@ export const StorageService = {
     safeSet(STORAGE_KEYS.PRODUCTS, DEFAULT_PRODUCTS);
     safeSet(STORAGE_KEYS.SAVED_SHOPS, []);
     safeSet(STORAGE_KEYS.ORDERS, []);
+    safeSet(STORAGE_KEYS.PENDING_ORDERS, []);
     safeSet(STORAGE_KEYS.SETTINGS, DEFAULT_SETTINGS);
-    safeSet(STORAGE_KEYS.CURRENT_USER, DEFAULT_SALES_BOYS[0]);
+    safeSet(STORAGE_KEYS.CURRENT_USER, null);
     localStorage.removeItem(STORAGE_KEYS.CURRENT_DRAFT);
     // Clean old keys too
     localStorage.removeItem('quickorder_products_v1');
     localStorage.removeItem('quickorder_saved_shops_v1');
   },
 };
+

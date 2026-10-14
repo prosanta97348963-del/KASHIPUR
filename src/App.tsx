@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Product, SalesBoy, Order, CompanySettings, CurrentDraft, OrderStatus } from './types';
 import { StorageService } from './utils/storage';
 import { SupabaseService } from './services/supabaseService';
+import { validateShopDetails, validateAndCalculateOrder, generateIdempotencyKey } from './utils/orderValidation';
 import { Header } from './components/Header';
 import { ShopDetailsStep } from './components/ShopDetailsStep';
 import { ProductCatalogStep } from './components/ProductCatalogStep';
@@ -42,6 +43,11 @@ export default function App() {
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState<boolean>(false);
   const [isAccessAdminModalOpen, setIsAccessAdminModalOpen] = useState<boolean>(false);
 
+  // Order Submission State
+  const [isSubmittingOrder, setIsSubmittingOrder] = useState<boolean>(false);
+  const [submitStatusText, setSubmitStatusText] = useState<string>('Saving order securely...');
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
+
   // Current Working Order Draft
   const [draft, setDraft] = useState<CurrentDraft>({
     shopName: '',
@@ -62,7 +68,7 @@ export default function App() {
   // Android PWA / APK install hook
   const { isInstallable, isInstalled, triggerInstall } = usePWAInstall();
 
-  // Sync with Supabase Cloud Database
+  // Sync with Supabase Cloud Database with Safe Reconcile (never overwrites pending local orders)
   const syncWithSupabase = useCallback(async () => {
     try {
       const conn = await SupabaseService.testConnection();
@@ -76,7 +82,7 @@ export default function App() {
           setProducts(remoteProds);
           StorageService.saveProducts(remoteProds);
         } else {
-          // If remote is empty or has old demo items, seed official catalog into Supabase
+          // Seed official catalog if cloud table is empty
           const localProds = StorageService.getProducts();
           for (const p of localProds) {
             await SupabaseService.upsertProduct(p);
@@ -95,11 +101,21 @@ export default function App() {
           }
         }
 
-        // 3. Fetch remote orders
+        // 3. Sync any pending offline orders
+        await SupabaseService.syncPendingOrders(StorageService.getProducts());
+
+        // 4. Fetch remote orders and safely merge with local pending orders
         const remoteOrders = await SupabaseService.getOrders();
-        if (remoteOrders && remoteOrders.length > 0) {
-          setOrders(remoteOrders);
-          StorageService.saveOrders(remoteOrders);
+        if (remoteOrders) {
+          const pendingOrders = StorageService.getPendingOrders();
+          const remoteIdempKeys = new Set(remoteOrders.map((o) => o.idempotencyKey));
+          const unsyncedLocal = pendingOrders.filter((p) => !remoteIdempKeys.has(p.idempotencyKey));
+
+          const merged = [...unsyncedLocal, ...remoteOrders];
+          merged.sort((a, b) => b.timestamp - a.timestamp);
+
+          setOrders(merged);
+          StorageService.saveOrders(merged);
         }
       } else if (conn.success && !conn.tablesExist) {
         setSupabaseConnected(false);
@@ -109,13 +125,13 @@ export default function App() {
     }
   }, []);
 
-  // Initialize data on mount
+  // Initialize data on mount (Strictly DO NOT auto-authenticate salesman without PIN)
   useEffect(() => {
     const loadedProducts = StorageService.getProducts();
     const loadedBoys = StorageService.getSalesBoys();
     const loadedOrders = StorageService.getOrders();
     const loadedSettings = StorageService.getSettings();
-    const activeBoy = StorageService.getCurrentSalesBoy() || loadedBoys[0] || null;
+    const activeBoy = StorageService.getCurrentSalesBoy(); // No auto-login fallback
 
     setProducts(loadedProducts);
     setSalesBoys(loadedBoys);
@@ -145,17 +161,29 @@ export default function App() {
     }
   }, [currentSalesBoy]);
 
-  // Persist draft changes locally
+  // Persist draft changes locally so salesman never loses work
   useEffect(() => {
     if (draft.shopName || Object.keys(draft.selectedQuantities).length > 0) {
       StorageService.saveDraft(draft);
     }
   }, [draft]);
 
+  // Automatically retry pending offline orders when network connection is restored
+  useEffect(() => {
+    const handleOnline = () => {
+      SupabaseService.syncPendingOrders(products).then(() => {
+        setOrders(StorageService.getOrders());
+      }).catch(() => {});
+    };
+
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [products]);
+
   // Compute active item count for badge
   const draftItemCount = Object.values(draft.selectedQuantities).filter((q) => q > 0).length;
 
-  // Handlers for Products Master (Local + Supabase sync)
+  // Handlers for Products Master
   const handleAddProduct = (prodData: Omit<Product, 'id'>) => {
     const added = StorageService.addProduct(prodData);
     setProducts(StorageService.getProducts());
@@ -174,7 +202,7 @@ export default function App() {
     SupabaseService.deleteProduct(id).catch(() => {});
   };
 
-  // Handlers for Sales Boys & Settings
+  // Handlers for Sales Staff & Settings
   const handleSaveSettings = (newSettings: CompanySettings) => {
     StorageService.saveSettings(newSettings);
     setSettings(newSettings);
@@ -200,10 +228,8 @@ export default function App() {
     StorageService.deleteSalesBoy(id);
     setSalesBoys(StorageService.getSalesBoys());
     if (currentSalesBoy?.id === id) {
-      const remaining = StorageService.getSalesBoys();
-      const next = remaining[0] || null;
-      setCurrentSalesBoy(next);
-      StorageService.setCurrentSalesBoy(next);
+      setCurrentSalesBoy(null);
+      StorageService.setCurrentSalesBoy(null);
     }
     SupabaseService.deleteSalesBoy(id).catch(() => {});
   };
@@ -231,7 +257,45 @@ export default function App() {
   };
 
   // Handlers for Order Confirmation & Finalization
-  const handleFinalizeOrder = () => {
+  const handleFinalizeOrder = async () => {
+    setSubmissionError(null);
+    setIsSubmittingOrder(true);
+    setSubmitStatusText('Validating order & prices...');
+
+    // 1. Validate salesman authentication
+    if (!currentSalesBoy) {
+      setIsSubmittingOrder(false);
+      setSubmissionError('Salesman authentication is required. Please login with your PIN.');
+      setIsLoginModalOpen(true);
+      return;
+    }
+
+    // 2. Validate shop details
+    const shopValidation = validateShopDetails({
+      shopName: draft.shopName,
+      shopPhone: draft.shopPhone,
+      shopAddress: draft.shopAddress,
+    });
+    if (!shopValidation.isValid) {
+      setIsSubmittingOrder(false);
+      setSubmissionError(Object.values(shopValidation.errors)[0] || 'Please check shop details.');
+      return;
+    }
+
+    // 3. Validate and calculate items using authoritative catalog
+    const orderValidation = validateAndCalculateOrder(draft.selectedQuantities, products);
+    if (!orderValidation.isValid) {
+      setIsSubmittingOrder(false);
+      setSubmissionError(orderValidation.errors[0] || 'Please select at least one active product.');
+      return;
+    }
+
+    // 4. Stable Idempotency Key (ensures retries NEVER create duplicate orders)
+    const idempotencyKey = draft.idempotencyKey || generateIdempotencyKey();
+    if (!draft.idempotencyKey) {
+      setDraft((prev) => ({ ...prev, idempotencyKey }));
+    }
+
     const now = new Date();
     const dd = String(now.getDate()).padStart(2, '0');
     const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -245,66 +309,88 @@ export default function App() {
     hours = hours ? hours : 12;
     const orderTimeStr = `${hours}:${minutes} ${ampm}`;
 
-    // Build line items
-    const orderItems = Object.entries(draft.selectedQuantities)
-      .filter(([_, qty]) => qty > 0)
-      .map(([prodId, qty]) => {
-        const prod = products.find((p) => p.id === prodId);
-        const price = prod ? prod.price : 0;
-        return {
-          productId: prodId,
-          productName: prod ? prod.name : 'Unknown Product',
-          productCode: prod ? prod.code : 'SKU',
-          quantity: qty,
-          price,
-          amount: price * qty,
-        };
-      });
-
-    const totalQty = orderItems.reduce((acc, item) => acc + item.quantity, 0);
-    const grandTotal = orderItems.reduce((acc, item) => acc + item.amount, 0);
-    const uniqueOrderId = StorageService.generateNextOrderId();
+    // Collision-proof order ID
+    const initialOrderId = StorageService.generateNextOrderId(currentSalesBoy.id);
 
     const newOrder: Order = {
       id: `ord-${Date.now()}`,
-      orderId: uniqueOrderId,
+      orderId: initialOrderId,
+      idempotencyKey,
       shopName: draft.shopName.trim(),
       shopPhone: draft.shopPhone.trim(),
       shopAddress: draft.shopAddress.trim(),
-      salesBoyId: currentSalesBoy?.id,
-      salesBoyName: draft.salesBoyName.trim() || currentSalesBoy?.name || 'Salesman',
+      salesBoyId: currentSalesBoy.id,
+      salesBoyName: currentSalesBoy.name,
       orderDate: orderDateStr,
       orderTime: orderTimeStr,
       timestamp: Date.now(),
-      totalItems: orderItems.length,
-      totalQuantity: totalQty,
-      grandTotal,
+      totalItems: orderValidation.validatedItems.length,
+      totalQuantity: orderValidation.totalQuantity,
+      grandTotal: orderValidation.grandTotal,
       status: 'Confirmed',
-      items: orderItems,
+      syncStatus: 'pending',
+      items: orderValidation.validatedItems,
     };
 
-    // Save locally
+    // 5. Save locally in orders and durable pending queue FIRST
     StorageService.addOrder(newOrder);
+    StorageService.addPendingOrder(newOrder);
     setOrders(StorageService.getOrders());
 
-    // Sync to Supabase in background
-    SupabaseService.saveOrder(newOrder).catch((e) => {
-      console.warn('Background Supabase order push failed:', e);
-    });
+    // 6. Attempt server-side submission
+    setSubmitStatusText('Syncing order with Supabase cloud database...');
+    try {
+      const result = await SupabaseService.submitOrder(newOrder, products);
 
-    // Clear draft
-    StorageService.saveDraft(null);
-    setDraft({
-      shopName: '',
-      shopPhone: '',
-      shopAddress: '',
-      salesBoyName: currentSalesBoy?.name || '',
-      selectedQuantities: {},
-    });
+      if (result.success && result.syncStatus === 'synced') {
+        // Server confirmed!
+        StorageService.markOrderSynced(idempotencyKey, result.order.orderId);
+        setOrders(StorageService.getOrders());
 
-    setIsConfirmModalOpen(false);
-    setCompletedOrder(newOrder);
-    setOrderStep('order-success');
+        // Safe to clear draft only now
+        StorageService.saveDraft(null);
+        setDraft({
+          shopName: '',
+          shopPhone: '',
+          shopAddress: '',
+          salesBoyName: currentSalesBoy.name,
+          selectedQuantities: {},
+        });
+
+        setIsConfirmModalOpen(false);
+        setIsSubmittingOrder(false);
+        setCompletedOrder(result.order);
+        setOrderStep('order-success');
+      } else {
+        // Network offline or pending sync: order is safely stored on device queue
+        StorageService.markOrderFailed(idempotencyKey, result.error || 'Pending cloud sync');
+        setOrders(StorageService.getOrders());
+
+        // Safe local persistence achieved
+        StorageService.saveDraft(null);
+        setDraft({
+          shopName: '',
+          shopPhone: '',
+          shopAddress: '',
+          salesBoyName: currentSalesBoy.name,
+          selectedQuantities: {},
+        });
+
+        setIsConfirmModalOpen(false);
+        setIsSubmittingOrder(false);
+        setCompletedOrder({
+          ...newOrder,
+          syncStatus: 'pending',
+          lastSyncError: result.error,
+        });
+        setOrderStep('order-success');
+      }
+    } catch (e: any) {
+      StorageService.markOrderFailed(idempotencyKey, e.message || 'Network exception');
+      setOrders(StorageService.getOrders());
+      setIsSubmittingOrder(false);
+      setSubmissionError(`Submission error: ${e.message}. Your draft has been kept safe.`);
+    }
   };
 
   const handleStartNewOrder = () => {
@@ -327,13 +413,30 @@ export default function App() {
     SupabaseService.updateOrderStatus(orderId, status).catch(() => {});
   };
 
+  const handleRetrySyncOrder = async (order: Order) => {
+    const res = await SupabaseService.submitOrder(order, products);
+    if (res.success && res.syncStatus === 'synced') {
+      StorageService.markOrderSynced(order.idempotencyKey, res.order.orderId);
+      setOrders(StorageService.getOrders());
+    } else {
+      StorageService.markOrderFailed(order.idempotencyKey, res.error || 'Retry failed');
+      setOrders(StorageService.getOrders());
+      throw new Error(res.error || 'Failed to sync to cloud');
+    }
+  };
+
+  const handleSyncAllPending = async () => {
+    await SupabaseService.syncPendingOrders(products);
+    setOrders(StorageService.getOrders());
+  };
+
   const handleResetAllData = () => {
     StorageService.resetAllData();
     setProducts(StorageService.getProducts());
     setSalesBoys(StorageService.getSalesBoys());
     setOrders(StorageService.getOrders());
     setSettings(StorageService.getSettings());
-    setCurrentSalesBoy(StorageService.getSalesBoys()[0] || null);
+    setCurrentSalesBoy(null);
     handleStartNewOrder();
   };
 
@@ -342,23 +445,15 @@ export default function App() {
     setProducts(catalog);
   };
 
-  // Calculate quick totals for confirmation modal
+  // Calculate quick totals for confirmation modal using authoritative pricing
   const confirmationTotals = (() => {
-    let qty = 0;
-    let total = 0;
-    Object.entries(draft.selectedQuantities).forEach(([prodId, q]) => {
-      if (q > 0) {
-        qty += q;
-        const p = products.find((prod) => prod.id === prodId);
-        if (p) total += p.price * q;
-      }
-    });
-    return { qty, total };
+    const res = validateAndCalculateOrder(draft.selectedQuantities, products);
+    return { qty: res.totalQuantity, total: res.grandTotal };
   })();
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col font-sans text-gray-900 antialiased selection:bg-emerald-200">
-      {/* Top Application Header - Salesman Focused */}
+    <div className="min-h-screen bg-gray-100 text-gray-900 font-sans flex flex-col selection:bg-emerald-200">
+      {/* Top Application Header */}
       <Header
         currentTab={currentTab}
         setCurrentTab={handleTabChange}
@@ -371,7 +466,7 @@ export default function App() {
         onOpenInstallModal={() => setIsInstallModalOpen(true)}
       />
 
-      {/* Main Content Area */}
+      {/* Main App Content View */}
       <main className="flex-1 w-full">
         {currentTab === 'order' && (
           <>
@@ -381,6 +476,7 @@ export default function App() {
                 setDraft={setDraft}
                 currentSalesBoy={currentSalesBoy}
                 onStartOrder={() => setOrderStep('product-catalog')}
+                onOpenLogin={() => setIsLoginModalOpen(true)}
               />
             )}
 
@@ -401,7 +497,10 @@ export default function App() {
                 products={products}
                 companySettings={settings}
                 onEditOrder={() => setOrderStep('product-catalog')}
-                onConfirmOrderRequest={() => setIsConfirmModalOpen(true)}
+                onConfirmOrderRequest={() => {
+                  setSubmissionError(null);
+                  setIsConfirmModalOpen(true);
+                }}
                 onRemoveItem={(prodId) => {
                   setDraft((prev) => {
                     const next = { ...prev.selectedQuantities };
@@ -421,6 +520,7 @@ export default function App() {
                   setCurrentTab('history');
                   setOrderStep('shop-details');
                 }}
+                onRetrySync={handleRetrySyncOrder}
               />
             )}
           </>
@@ -432,6 +532,8 @@ export default function App() {
             companySettings={settings}
             onUpdateStatus={handleUpdateOrderStatus}
             onStartNewOrder={handleStartNewOrder}
+            onRetrySyncOrder={handleRetrySyncOrder}
+            onSyncAllPending={handleSyncAllPending}
           />
         )}
 
@@ -469,18 +571,25 @@ export default function App() {
         </button>
       </footer>
 
-      {/* Order Confirmation Modal */}
+      {/* Order Confirmation Modal with Real-time Saving State & Safe Retry */}
       <OrderConfirmationModal
         isOpen={isConfirmModalOpen}
-        onClose={() => setIsConfirmModalOpen(false)}
+        onClose={() => {
+          if (!isSubmittingOrder) {
+            setIsConfirmModalOpen(false);
+          }
+        }}
         onConfirm={handleFinalizeOrder}
         shopName={draft.shopName}
         totalQuantity={confirmationTotals.qty}
         grandTotal={confirmationTotals.total}
         currency={settings.currency || '₹'}
+        isSubmitting={isSubmittingOrder}
+        submitStatusText={submitStatusText}
+        submissionError={submissionError}
       />
 
-      {/* Salesman Profile Switcher Modal (Strictly for Salesmen, NO Admin Access) */}
+      {/* Salesman Login Modal (Requires 4-Digit PIN, NO Quick Select Bypass) */}
       <LoginModal
         isOpen={isLoginModalOpen}
         onClose={() => setIsLoginModalOpen(false)}

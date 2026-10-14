@@ -1,13 +1,25 @@
 import React, { useState } from 'react';
 import { Order, CompanySettings } from '../types';
 import { formatWhatsAppOrderMessage, getWhatsAppShareUrl, sanitizeWhatsAppPhone } from '../utils/whatsapp';
-import { CheckCircle2, MessageCircle, Copy, Check, ArrowRight, Store, ExternalLink, Calendar, Hash, FileText } from 'lucide-react';
+import {
+  CheckCircle2,
+  MessageCircle,
+  Copy,
+  Check,
+  ArrowRight,
+  ExternalLink,
+  CloudCheck,
+  CloudOff,
+  RefreshCw,
+  AlertTriangle
+} from 'lucide-react';
 
 interface OrderSuccessStepProps {
   order: Order;
   companySettings: CompanySettings;
   onStartNewOrder: () => void;
   onViewHistory: () => void;
+  onRetrySync?: (order: Order) => Promise<void>;
 }
 
 export const OrderSuccessStep: React.FC<OrderSuccessStepProps> = ({
@@ -15,9 +27,12 @@ export const OrderSuccessStep: React.FC<OrderSuccessStepProps> = ({
   companySettings,
   onStartNewOrder,
   onViewHistory,
+  onRetrySync,
 }) => {
   const [copied, setCopied] = useState(false);
-  const [includePrices, setIncludePrices] = useState(false); // Defaults to FALSE (clean & compact as requested)
+  const [includePrices, setIncludePrices] = useState(false);
+  const [isRetryingSync, setIsRetryingSync] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(order.syncStatus || 'synced');
   const currency = companySettings.currency || '₹';
 
   const messageText = formatWhatsAppOrderMessage(order, {
@@ -37,35 +52,93 @@ export const OrderSuccessStep: React.FC<OrderSuccessStepProps> = ({
     }
   };
 
+  const handleManualRetry = async () => {
+    if (!onRetrySync) return;
+    setIsRetryingSync(true);
+    try {
+      await onRetrySync(order);
+      setSyncStatus('synced');
+    } catch (e) {
+      console.warn('Manual sync retry failed:', e);
+    } finally {
+      setIsRetryingSync(false);
+    }
+  };
+
+  const isCloudSynced = syncStatus === 'synced';
+
   return (
     <div className="max-w-md mx-auto p-4 pb-28 animate-in fade-in duration-200 space-y-4">
       {/* Success Banner */}
-      <div className="bg-emerald-600 text-white rounded-2xl p-5 text-center shadow-lg relative overflow-hidden">
+      <div
+        className={`${
+          isCloudSynced ? 'bg-emerald-600' : 'bg-amber-600'
+        } text-white rounded-2xl p-5 text-center shadow-lg relative overflow-hidden transition-colors`}
+      >
         <div className="w-14 h-14 bg-white/20 backdrop-blur-xs rounded-full flex items-center justify-center mx-auto mb-2.5 shadow-inner">
           <CheckCircle2 className="w-8 h-8 text-white" />
         </div>
-        <span className="inline-block text-[10px] uppercase tracking-widest font-extrabold bg-emerald-700/80 px-2.5 py-0.5 rounded-full mb-1">
-          Order Confirmed
-        </span>
-        <h2 className="text-lg font-black mt-0.5">Order Saved Successfully!</h2>
 
-        <div className="mt-3.5 pt-3 border-t border-emerald-500/50 flex items-center justify-around text-xs">
+        <div className="inline-flex items-center space-x-1 text-[11px] uppercase tracking-widest font-extrabold bg-black/20 px-3 py-0.5 rounded-full mb-1">
+          {isCloudSynced ? (
+            <>
+              <Check className="w-3.5 h-3.5 mr-1" />
+              <span>Confirmed & Cloud Synced</span>
+            </>
+          ) : (
+            <>
+              <AlertTriangle className="w-3.5 h-3.5 mr-1" />
+              <span>Saved Locally (Pending Cloud Sync)</span>
+            </>
+          )}
+        </div>
+
+        <h2 className="text-lg font-black mt-0.5">
+          {isCloudSynced ? 'Order Saved Successfully!' : 'Order Saved to Device Queue!'}
+        </h2>
+
+        {!isCloudSynced && (
+          <p className="text-xs text-amber-100 mt-1 max-w-xs mx-auto">
+            Offline or slow connection. Your order is safely saved on this phone and will automatically push to the cloud. You can safely send it on WhatsApp right now!
+          </p>
+        )}
+
+        <div className="mt-3.5 pt-3 border-t border-white/20 flex items-center justify-around text-xs">
           <div className="text-center">
             <span className="opacity-80 block text-[10px]">Order ID</span>
             <span className="font-mono font-bold text-xs">{order.orderId}</span>
           </div>
-          <div className="h-5 w-px bg-emerald-500/50"></div>
+          <div className="h-5 w-px bg-white/20"></div>
           <div className="text-center">
             <span className="opacity-80 block text-[10px]">Total Items</span>
             <span className="font-bold text-xs">{order.totalItems} items</span>
           </div>
-          <div className="h-5 w-px bg-emerald-500/50"></div>
+          <div className="h-5 w-px bg-white/20"></div>
           <div className="text-center">
             <span className="opacity-80 block text-[10px]">Total Quantity</span>
             <span className="font-bold text-xs">{order.totalQuantity} pcs</span>
           </div>
         </div>
       </div>
+
+      {/* Manual Retry Sync button if pending */}
+      {!isCloudSynced && onRetrySync && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 flex items-center justify-between">
+          <div className="text-xs text-amber-900">
+            <span className="font-bold block">Need cloud confirmation now?</span>
+            <span className="text-[11px] text-amber-700">Tap to retry pushing to Supabase</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleManualRetry}
+            disabled={isRetryingSync}
+            className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-bold text-xs rounded-xl shadow-2xs flex items-center space-x-1.5 transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRetryingSync ? 'animate-spin' : ''}`} />
+            <span>{isRetryingSync ? 'Syncing...' : 'Retry Cloud Sync'}</span>
+          </button>
+        </div>
+      )}
 
       {/* WHATSAPP ACTION BUTTON - Primary User Action */}
       <div className="bg-white rounded-2xl border-2 border-emerald-500 p-4.5 shadow-md space-y-3">

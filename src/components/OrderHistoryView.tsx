@@ -1,13 +1,32 @@
 import React, { useState, useMemo } from 'react';
 import { Order, CompanySettings, OrderStatus } from '../types';
 import { formatWhatsAppOrderMessage, getWhatsAppShareUrl } from '../utils/whatsapp';
-import { Search, Store, Phone, Calendar, User, Eye, MessageCircle, CheckCircle, Clock, X, ExternalLink, Printer } from 'lucide-react';
+import {
+  Search,
+  Store,
+  Phone,
+  Calendar,
+  User,
+  Eye,
+  MessageCircle,
+  CheckCircle,
+  Clock,
+  X,
+  ExternalLink,
+  Printer,
+  RefreshCw,
+  AlertTriangle,
+  CloudCheck,
+  CloudAlert
+} from 'lucide-react';
 
 interface OrderHistoryViewProps {
   orders: Order[];
   companySettings: CompanySettings;
   onUpdateStatus: (orderId: string, status: OrderStatus) => void;
   onStartNewOrder: () => void;
+  onRetrySyncOrder?: (order: Order) => Promise<void>;
+  onSyncAllPending?: () => Promise<void>;
 }
 
 export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
@@ -15,12 +34,18 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
   companySettings,
   onUpdateStatus,
   onStartNewOrder,
+  onRetrySyncOrder,
+  onSyncAllPending,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'All' | OrderStatus>('All');
+  const [statusFilter, setStatusFilter] = useState<'All' | OrderStatus | 'PendingSync'>('All');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [retryingOrderId, setRetryingOrderId] = useState<string | null>(null);
 
   const currency = companySettings.currency || '₹';
+
+  const pendingOrdersCount = orders.filter((o) => o.syncStatus !== 'synced').length;
 
   const filteredOrders = useMemo(() => {
     return orders.filter((order) => {
@@ -31,11 +56,36 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
         order.shopPhone.includes(searchQuery) ||
         order.salesBoyName.toLowerCase().includes(searchQuery.toLowerCase());
 
-      const matchStatus = statusFilter === 'All' || order.status === statusFilter;
+      let matchStatus = true;
+      if (statusFilter === 'PendingSync') {
+        matchStatus = order.syncStatus !== 'synced';
+      } else if (statusFilter !== 'All') {
+        matchStatus = order.status === statusFilter;
+      }
 
       return matchSearch && matchStatus;
     });
   }, [orders, searchQuery, statusFilter]);
+
+  const handleSyncAll = async () => {
+    if (!onSyncAllPending) return;
+    setIsSyncingAll(true);
+    try {
+      await onSyncAllPending();
+    } finally {
+      setIsSyncingAll(false);
+    }
+  };
+
+  const handleRetryOrder = async (order: Order) => {
+    if (!onRetrySyncOrder) return;
+    setRetryingOrderId(order.id);
+    try {
+      await onRetrySyncOrder(order);
+    } finally {
+      setRetryingOrderId(null);
+    }
+  };
 
   const getStatusBadge = (status: OrderStatus) => {
     switch (status) {
@@ -64,11 +114,35 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
         </div>
         <button
           onClick={onStartNewOrder}
-          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg shadow-xs"
+          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-bold text-xs rounded-lg shadow-xs transition-colors"
         >
           + New Order
         </button>
       </div>
+
+      {/* Pending Sync Queue Alert Banner */}
+      {pendingOrdersCount > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-2xl p-3 flex items-center justify-between shadow-2xs">
+          <div className="flex items-center space-x-2">
+            <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+            <div className="text-xs text-amber-900">
+              <span className="font-bold">{pendingOrdersCount} Order{pendingOrdersCount > 1 ? 's' : ''} Pending Cloud Sync</span>
+              <p className="text-[11px] text-amber-700">Orders saved locally on device</p>
+            </div>
+          </div>
+          {onSyncAllPending && (
+            <button
+              type="button"
+              onClick={handleSyncAll}
+              disabled={isSyncingAll}
+              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white font-bold text-xs rounded-lg shadow-2xs flex items-center space-x-1"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isSyncingAll ? 'animate-spin' : ''}`} />
+              <span>{isSyncingAll ? 'Syncing...' : 'Sync Now'}</span>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Search & Filter Bar */}
       <div className="space-y-2">
@@ -93,7 +167,7 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
 
         {/* Status Filter Tabs */}
         <div className="flex items-center space-x-1 overflow-x-auto no-scrollbar py-0.5">
-          {(['All', 'Confirmed', 'Completed', 'Pending'] as const).map((tab) => (
+          {(['All', 'Confirmed', 'Completed', 'PendingSync'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setStatusFilter(tab)}
@@ -103,7 +177,7 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                   : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
               }`}
             >
-              {tab}
+              {tab === 'PendingSync' ? `Pending Sync (${pendingOrdersCount})` : tab}
             </button>
           ))}
         </div>
@@ -133,6 +207,8 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
           {filteredOrders.map((order) => {
             const messageText = formatWhatsAppOrderMessage(order, currency);
             const waUrl = getWhatsAppShareUrl(companySettings.whatsappNumber, messageText);
+            const isSynced = order.syncStatus === 'synced';
+            const isRetrying = retryingOrderId === order.id;
 
             return (
               <div
@@ -140,7 +216,7 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                 className="bg-white rounded-2xl border border-gray-200 shadow-2xs hover:shadow-xs transition-all overflow-hidden"
               >
                 {/* Header row */}
-                <div className="p-3.5 bg-gray-50/70 border-b border-gray-100 flex items-center justify-between">
+                <div className="p-3 bg-gray-50/70 border-b border-gray-100 flex items-center justify-between">
                   <div className="flex items-center space-x-2">
                     <span className="font-mono text-xs font-extrabold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
                       {order.orderId}
@@ -148,19 +224,34 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                     <span className="text-[11px] text-gray-500">{order.orderDate}</span>
                   </div>
 
-                  {/* Status Dropdown */}
-                  <select
-                    value={order.status}
-                    onChange={(e) => onUpdateStatus(order.id, e.target.value as OrderStatus)}
-                    className={`text-[11px] font-bold px-2 py-0.5 rounded-full border cursor-pointer focus:outline-hidden ${getStatusBadge(
-                      order.status
-                    )}`}
-                  >
-                    <option value="Confirmed">Confirmed</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Pending">Pending</option>
-                    <option value="Cancelled">Cancelled</option>
-                  </select>
+                  <div className="flex items-center space-x-1.5">
+                    {/* Sync Status Badge */}
+                    {isSynced ? (
+                      <span className="inline-flex items-center text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">
+                        <CheckCircle className="w-3 h-3 mr-0.5 text-emerald-600" />
+                        Cloud
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded-full">
+                        <Clock className="w-3 h-3 mr-0.5 text-amber-600" />
+                        Queued
+                      </span>
+                    )}
+
+                    {/* Status Dropdown */}
+                    <select
+                      value={order.status}
+                      onChange={(e) => onUpdateStatus(order.id, e.target.value as OrderStatus)}
+                      className={`text-[11px] font-bold px-2 py-0.5 rounded-full border cursor-pointer focus:outline-hidden ${getStatusBadge(
+                        order.status
+                      )}`}
+                    >
+                      <option value="Confirmed">Confirmed</option>
+                      <option value="Completed">Completed</option>
+                      <option value="Pending">Pending</option>
+                      <option value="Cancelled">Cancelled</option>
+                    </select>
+                  </div>
                 </div>
 
                 {/* Body details */}
@@ -179,7 +270,7 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
 
                     <div className="text-right shrink-0">
                       <div className="text-base font-extrabold text-emerald-800">
-                        {currency}{order.grandTotal.toLocaleString('en-IN')}
+                        {currency}{order.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
                       <span className="text-[11px] text-gray-500 font-medium block">
                         {order.totalQuantity} pcs ({order.totalItems} items)
@@ -187,14 +278,33 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                     </div>
                   </div>
 
+                  {order.lastSyncError && !isSynced && (
+                    <div className="text-[10px] text-amber-800 bg-amber-50 p-1.5 rounded-lg border border-amber-200">
+                      Sync notice: {order.lastSyncError}
+                    </div>
+                  )}
+
                   <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-xs text-gray-500">
                     <div className="flex items-center space-x-1 text-[11px]">
                       <User className="w-3 h-3 text-gray-400" />
-                      <span>By: <b className="text-gray-700">{order.salesBoyName || 'Rahul'}</b></span>
+                      <span>By: <b className="text-gray-700">{order.salesBoyName || 'Salesman'}</b></span>
                     </div>
 
                     {/* Actions */}
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center space-x-1.5">
+                      {!isSynced && onRetrySyncOrder && (
+                        <button
+                          type="button"
+                          onClick={() => handleRetryOrder(order)}
+                          disabled={isRetrying}
+                          className="px-2 py-1 text-[11px] font-bold text-amber-800 bg-amber-100 hover:bg-amber-200 rounded-lg flex items-center space-x-1 transition-colors"
+                          title="Retry Cloud Sync"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isRetrying ? 'animate-spin' : ''}`} />
+                          <span>{isRetrying ? 'Syncing...' : 'Retry'}</span>
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         onClick={() => setSelectedOrder(order)}
@@ -249,7 +359,7 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                 <div className="text-gray-600">📞 {selectedOrder.shopPhone}</div>
                 <div className="text-gray-600">📍 {selectedOrder.shopAddress}</div>
                 <div className="text-gray-500 pt-1 border-t border-gray-200 mt-1 flex justify-between">
-                  <span>Sales Boy: <b>{selectedOrder.salesBoyName}</b></span>
+                  <span>Salesman: <b>{selectedOrder.salesBoyName}</b></span>
                   <span>Date: <b>{selectedOrder.orderDate} {selectedOrder.orderTime}</b></span>
                 </div>
               </div>
@@ -269,14 +379,14 @@ export const OrderHistoryView: React.FC<OrderHistoryViewProps> = ({
                         </div>
                       </div>
                       <div className="text-right font-extrabold text-gray-900">
-                        {currency}{item.amount.toLocaleString('en-IN')}
+                        {currency}{item.amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
                     </div>
                   ))}
                   <div className="p-3 bg-emerald-50/70 font-bold flex justify-between text-sm text-gray-900 border-t border-gray-200">
                     <span>Grand Total ({selectedOrder.totalQuantity} pcs):</span>
                     <span className="text-emerald-800 font-extrabold">
-                      {currency}{selectedOrder.grandTotal.toLocaleString('en-IN')}
+                      {currency}{selectedOrder.grandTotal.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </span>
                   </div>
                 </div>

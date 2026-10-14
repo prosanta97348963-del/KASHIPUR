@@ -25,10 +25,12 @@ export interface OrderItem {
 }
 
 export type OrderStatus = 'Pending' | 'Confirmed' | 'Completed' | 'Cancelled';
+export type SyncStatus = 'synced' | 'pending' | 'failed';
 
 export interface Order {
-  id: string;
-  orderId: string; // e.g. ORD-20261013-001
+  id: string; // client id (e.g. ord-17123456789)
+  orderId: string; // business order number (e.g. ORD-20261013-001)
+  idempotencyKey: string; // unique key preventing duplicate submissions
   shopName: string;
   shopPhone: string;
   shopAddress: string;
@@ -42,6 +44,8 @@ export interface Order {
   grandTotal: number;
   status: OrderStatus;
   items: OrderItem[];
+  syncStatus: SyncStatus;
+  lastSyncError?: string;
 }
 
 export interface CompanySettings {
@@ -57,4 +61,29 @@ export interface CurrentDraft {
   shopAddress: string;
   salesBoyName: string;
   selectedQuantities: Record<string, number>; // productId -> quantity
+  idempotencyKey?: string;
+}
+
+export interface SalesBoyPublic {
+  id: string;
+  name: string;
+  mobile: string;
+  active: boolean;
+}
+
+export interface OrderValidationResult {
+  isValid: boolean;
+  errors: string[];
+  validatedItems: OrderItem[];
+  totalQuantity: number;
+  grandTotal: number;
+}
+
+export interface SubmitOrderResult {
+  success: boolean;
+  order: Order;
+  syncStatus: SyncStatus;
+  message?: string;
+  isDuplicate?: boolean;
+  error?: string;
 }
